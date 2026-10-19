@@ -200,6 +200,26 @@ unconditional SWEET kprintf markers around each startup entry
 eb/irqon so the next boot photo directly names the hanging entry.
 Build run 39248634013.
 
+## Fourth XNU boot (build 39248634013) — self-inflicted early panic
+
+Panicked much earlier: "SWEET EARLY 4: cpu_bootstrap done" then
+"invalid ticket lock 0xfffffe0007b904c8 <0x0 0x0 0x0 0x0>
+@lock_ticket.c:134". Symbolicated: the lock is `_log_lock`
+(osfmk/kern/printf.c:784, LCK_TICKET_DECLARE). It is initialized by a
+startup hook STARTUP_ARG(LOCKS, RANK_FOURTH, lck_ticket_startup_init).
+My 0083 kprintf inside the startup loop ran for entries BEFORE that
+hook -> printf -> bsd_log_lock -> lck_ticket_lock on uninitialized
+lock -> panic. The instrumentation itself caused the crash, NOT a
+regression vs build 3.
+
+Fix: 0083 now only prints when upto >= STARTUP_SUB_SYSCTL (the exact
+region under investigation; log_lock/console all initialized by then).
+Build run 39250323317.
+
+Lesson: kprintf is NOT safe during early startup entries (LOCKS,
+KPRINTF phases). Any future early instrumentation must write the
+framebuffer directly like the SWEET EARLY markers, or stay >= SYSCTL.
+
 ## Open questions / guesses
 
 - Whether dynamic memory pools (not in the DT) steal from the chosen RAM
