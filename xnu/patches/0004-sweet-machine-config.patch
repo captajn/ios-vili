@@ -135,21 +135,20 @@ diff --git a/pexpert/arm/pe_fiq.c b/pexpert/arm/pe_fiq.c
 index 3ad743f..4ec6989 100644
 --- a/pexpert/arm/pe_fiq.c
 +++ b/pexpert/arm/pe_fiq.c
-@@ -141,11 +141,25 @@ pe_init_fiq()
+@@ -141,11 +141,24 @@ pe_init_fiq()
  		}
  	}
  
 +#if defined(SWEET)
 +	/*
-+	 * Real hardware with two security states: Group 0 is TrustZone's and
-+	 * non-secure writes to it are ignored. Everything we own is Group 1 NS
-+	 * and arrives as an IRQ (see sleh_irq). GICR_IGROUPR0 reads as zero
-+	 * from the non-secure side even after this write; delivery still works.
++	 * vili/lahaina: the redist SGI page's config registers are
++	 * secure-owned — IGROUPR0 and IPRIORITYR writes take a synchronous
++	 * external abort (kernel panic at this write; the shim's posted
++	 * device store dropped it silently). QHEE already leaves PPIs/SGIs
++	 * in a usable non-secure group (Linux relies on it), so only the
++	 * enable bits are written — ISENABLER0 writes DO take (verified by
++	 * readback in the shim probe).
 +	 */
-+	gicr_write32(GICR_IGROUPR0, 0xFFFFFFFF);
-+	/* vili: lahaina's redist takes an external abort on ANY IPRIORITYR
-+	 * write (proven in the shim probe). Default priority 0 + PMR 0xff
-+	 * already passes everything, so leave priorities unprogrammed. */
 +	gicr_write32(GICR_ISENABLER0, (1U << SWEET_VTIMER_INTID) | (1U << SWEET_IPI_SGI));
 +#else
  	// Configure timers and legacy FIQ to be group 0
