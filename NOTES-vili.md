@@ -308,6 +308,69 @@ correct next milestone is sweet's 0020 state — `BSD root:` then
 `Waiting on ... IOMedia / Apple_HFS` with no panic. Per NOTES.md the sweet
 port reached PID 1 and Apple launchd at the equivalent stage.
 
+> FALSIFIED by the seventh boot below: adding `rd=ufsroot0` changed nothing,
+> so the hang is *before* `IOFindBSDRoot`. The paragraph above is wrong about
+> the current blocker.
+
+## Seventh XNU boot (20:31, repack `7e9c7b1d…` — same kernel, `rd=ufsroot0`)
+
+Cmdline `debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam rd=ufsroot0`.
+Same kernel binary as the sixth boot (sha `8a33c781…`, run 39252040725), so
+this is a pure boot-arg experiment.
+
+Reading the wrapped console by its blank gap (newest line = the row just above
+the gap, oldest = bottom row) gives the real chronology, which matches
+`osfmk/kern/startup.c`:
+
+    SE15.-1@0xfffffe0007afcabc(...) x8   STARTUP_SUB_SYSCTL hooks, all SEok
+    SEB:iokit
+    iBoot version: vili-shim
+    "name" not a kext / "AAPL,phandle" not a kext
+    SEB:eb
+    SE16.0@... ulock_initialize>thread_max=10240, ull_hash_buckets=4096
+    SE16.0@... SWEET PRNG: HMAC-SHA256 registered
+    SE16.1@... SWEET pthread: Libpthread-514.100.2 registered
+    SE16.2147483647@0xfffffe0007ab9140 / abff78 / 7fb900 / aa569c
+    SEB:irqon                                  <- after spllo()
+    calling mpo_policy_init for vnguard
+    Security policy loaded: Guarded vnode policy (vnguard)
+    SWEET: trust caches unavailable (Image4/AMFI not installed)
+    keepsyms boot arg specified; keeping linkedit segment for symbols
+    No POST boot-arg set
+    SWEET: starting device-tree platform expert
+    SWEET: platform expert registered
+    SWEET AKS / WDT / SURF / HID buttons / HID touch / BATTERY registered
+    SWEET FB: AppleCLCD 1080x2400 stride 4320 at 0xea600000,
+             default surface 1, presented as 1125x2436      <- newest, frozen
+
+So the sixth boot's "hang right after kdp_init" reading was wrong: the boot
+gets all the way to the tail of `kernel_bootstrap_thread`, past
+`machine_lockdown` and `kernel_do_post`, i.e. at `PE_lockdown_iokit()`
+(startup.c:772) — the last thing before `bsd_init()` (startup.c:790).
+
+`rd=ufsroot0` had zero effect => the hang precedes `IOFindBSDRoot`, so the
+root-device wait is NOT the cause. The last statement executed is the
+`IOLog` immediately before `return true` in `AppleCLCD::start()`
+(patch 0046 tail, format extended by patch 0061).
+
+Note: patch 0028 has no IOKit driver at all (`sweet_ufs_rootdev()` is called
+directly from `IOFindBSDRoot`), so the `sweet-ufs` ADT node cannot be the
+thing that hangs during platform-expert device start.
+
+## Eighth attempt prepared (no rebuild): `startup_debug=1`
+
+`startup_debug=1` was tried earlier (build 3) and produced nothing — that is
+now explained: every one of its `entry:`/`done:`/`kernel_bootstrap: <phase>`
+lines goes through the same `kprintf` gate that killed the 0083/0084 markers.
+With `-enable_kprintf_spam` in the cmdline it should finally work, and it is
+strictly better than patch 0083 because stock XNU prints the phase names
+(`kdp_init`, `PE_lockdown_iokit`, `bsd_init`, `mount_root`, …) and
+`entry:`/`done:` pairs per startup hook — the hook that prints `entry:`
+without `done:` is the hang, with no symbolication needed.
+
+Image: `shim/out/shim-boot.img` sha `7e9c7b1d151c3b19`, cmdline
+`debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam startup_debug=1 rd=ufsroot0`.
+
 ## Open questions / guesses
 
 - Whether dynamic memory pools (not in the DT) steal from the chosen RAM
