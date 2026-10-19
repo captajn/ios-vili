@@ -1,0 +1,74 @@
+diff --git a/osfmk/kdp/kdp_udp.c b/osfmk/kdp/kdp_udp.c
+--- a/osfmk/kdp/kdp_udp.c
++++ b/osfmk/kdp/kdp_udp.c
+@@ -2260,4 +2260,10 @@
+ 	kdp_setup_packet_size();
++#if defined(SWEET)
++	kprintf("SEK:pkt\n");
++#endif
+ 	kdp_core_init();
++#if defined(SWEET)
++	kprintf("SEK:core\n");
++#endif
+ 
+ #if CONFIG_SERIAL_KDP
+@@ -2265,4 +2271,7 @@
+ 	struct kdp_ether_addr macaddr;
+ 
++#if defined(SWEET)
++	kprintf("SEK:sn\n");
++#endif
+ 	boolean_t kdp_match_name_found = PE_parse_boot_argn("kdp_match_name", kdpname, sizeof(kdpname));
+ 	boolean_t kdp_not_serial = kdp_match_name_found ? (strncmp(kdpname, "serial", sizeof(kdpname))) : TRUE;
+diff --git a/osfmk/kdp/kdp_core.c b/osfmk/kdp/kdp_core.c
+--- a/osfmk/kdp/kdp_core.c
++++ b/osfmk/kdp/kdp_core.c
+@@ -1379,4 +1379,7 @@
+ 	}
+ 
++#if defined(SWEET)
++	kprintf("KOS:buf\n");
++#endif
+ 	bzero(&buffer_output_stage, sizeof(buffer_output_stage));
+ 	ret = buffer_stage_initialize(&buffer_output_stage, kdp_crashdump_pkt_size);
+@@ -1385,4 +1388,7 @@
+ 	}
+ 
++#if defined(SWEET)
++	kprintf("KOS:net\n");
++#endif
+ 	bzero(&net_output_stage, sizeof(net_output_stage));
+ 	ret = net_stage_initialize(&net_output_stage);
+@@ -1391,4 +1397,7 @@
+ 	}
+ 
++#if defined(SWEET)
++	kprintf("KOS:pro\n");
++#endif
+ 	bzero(&progress_notify_output_stage, sizeof(progress_notify_output_stage));
+ 	ret = progress_notify_stage_initialize(&progress_notify_output_stage);
+@@ -1404,5 +1413,8 @@
+ #endif // CONFIG_KDP_COREDUMP_ENCRYPTION
+ 
+ #if defined(__arm64__)
++#if defined(SWEET)
++	kprintf("KOS:shm\n");
++#endif
+ 	bzero(&shmem_output_stage, sizeof(shmem_output_stage));
+ 	if (PE_consistent_debug_enabled() && PE_i_can_has_debugger(NULL)) {
+@@ -1416,4 +1428,7 @@
+ #if defined(__arm64__)
++#if defined(SWEET)
++	kprintf("KOS:mba\n");
++#endif
+ 	bzero(&memory_backing_aware_buffer_output_stage, sizeof(memory_backing_aware_buffer_output_stage));
+ 	ret = memory_backing_aware_buffer_stage_initialize(&memory_backing_aware_buffer_output_stage);
+ 	if (KERN_SUCCESS != ret) {
+@@ -1422,4 +1437,7 @@
+ #endif /* defined(__arm64__) */
+ 
++#if defined(SWEET)
++	kprintf("KOS:done\n");
++#endif
+ 	return ret;
+ }
