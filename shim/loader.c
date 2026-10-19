@@ -2,10 +2,16 @@
  * Milestone 4: act as iBoot for xnu.
  *
  * mkpayload.py already resolved the kernel's chained fixups and built the
- * ADT, so this only has to: find the payload in the ABL ramdisk, copy the
- * segments to phys_base + (vmaddr - virt_base), place the ADT and
- * boot_args behind the kernel, and jump to the entry point with the MMU
- * and caches off, x0 = boot_args (physical).
+ * ADT, so this only has to: find the payload, copy the segments to
+ * phys_base + (vmaddr - virt_base), place the ADT and boot_args behind
+ * the kernel, and jump to the entry point with the MMU and caches off,
+ * x0 = boot_args (physical).
+ *
+ * Payload discovery: on Android boot v2 (sweet) the payload was the boot
+ * ramdisk and ABL pointed /chosen/linux,initrd-start|end at it. Vili uses
+ * boot v3, which has no ramdisk, so mkbootimg3.py appends the payload
+ * behind the shim image and stores file offset/size in the ARM64 header's
+ * res2/res3 fields (0x20/0x28). Initrd wins when both exist.
  */
 #include <stdint.h>
 #include "console.h"
@@ -76,14 +82,28 @@ static int magic_ok(const char *m)
 
 typedef void (*xnu_entry_t)(uint64_t boot_args_pa);
 
+static inline uint64_t rd64(uintptr_t a) { return *(volatile uint64_t *)a; }
+
+extern char _head[];	/* start.S: ARM64 Image header at image base */
+
 const char *loader_boot(uintptr_t dtb)
 {
 	uint64_t rd_start, rd_end;
 
-	if (!fdt_chosen_u64(dtb, "linux,initrd-start", &rd_start) ||
-	    !fdt_chosen_u64(dtb, "linux,initrd-end", &rd_end))
-		return "no initrd in /chosen";
-	con_hex2("INITRD", "lo=", rd_start, "hi=", rd_end);
+	if (fdt_chosen_u64(dtb, "linux,initrd-start", &rd_start) &&
+	    fdt_chosen_u64(dtb, "linux,initrd-end", &rd_end)) {
+		con_hex2("INITRD", "lo=", rd_start, "hi=", rd_end);
+	} else {
+		/* Boot v3: payload appended to the kernel blob; res2/res3 hold
+		 * its file offset and size (0 if a bare probe image). */
+		uintptr_t img = (uintptr_t)_head;
+		uint64_t off = rd64(img + 0x20), len = rd64(img + 0x28);
+		if (!off || !len)
+			return "no initrd in /chosen and res2/res3 empty";
+		rd_start = img + off;
+		rd_end = rd_start + len;
+		con_hex2("APPEND", "lo=", rd_start, "hi=", rd_end);
+	}
 
 	const struct payload *p = (const struct payload *)rd_start;
 	if (!magic_ok(p->magic))
