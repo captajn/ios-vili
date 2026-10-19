@@ -155,6 +155,24 @@ Risk to watch: if PPIs/SGIs are actually Group0, the vtimer won't
 deliver -> early hang later (calibration). If so, need to test whether
 an IGROUPR0 write via different attributes/EL path works.
 
+## Second XNU boot attempt (build 39241159323, IGROUPR0 write removed)
+
+Progressed PAST pe_init_fiq — the IGROUPR0 fix worked. New panic:
+
+    panic: Undefined kernel instruction
+    pc=0xfffffe0007491340 instr/sleh.c:518  esr EC 0
+
+Symbolicated: `_fiq_context_init`+0xc -> `_enable_virtual_timer()` in
+osfmk/arm64/machine_routines.c. The faulting window contains
+`msr cntv_ctl_el0` (ok on vili — shim proved it) immediately followed
+by `msr cntp_ctl_el0` (proven to trap to QHEE -> injected undefined).
+Patch 0082 drops the CNTP_CTL_EL0 write under SWEET. Build run
+39243974933.
+
+If the next panic still lands at the CNTV write itself, then QHEE
+traps CNTV_CTL_EL0 in this specific context and the enable write must
+be removed too (timer interrupt then enabled via CNTV_TVAL anyway).
+
 ## Open questions / guesses
 
 - Whether dynamic memory pools (not in the DT) steal from the chosen RAM
