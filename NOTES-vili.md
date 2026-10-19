@@ -173,6 +173,33 @@ If the next panic still lands at the CNTV write itself, then QHEE
 traps CNTV_CTL_EL0 in this specific context and the enable write must
 be removed too (timer interrupt then enabled via CNTV_TVAL anyway).
 
+## Third XNU boot (build 39243974933, CNTP_CTL skipped) — deep progress
+
+Kernel now boots well past fiq_context_init. Framebuffer log shows
+real XNU startup: platform expert registered, SWEET NDT/SURF/HID/
+BATTERY/FB registrations (AppleCLCD bound to 0xea60000 1080x2400),
+pmap/vm zone tables, "VM bootstrap done: 85 maps, 165 entries and
+503 holes left", OSLog/firehose log queues, "standard timeslicing
+quantum is 10000 us", "mig_table_max_displ = 54 mach_kobj_count = 374",
+two "debug_log_init: Error!! gPanicBase is still not initialized"
+(normal — no iBoot panic region), last line "kdp_core zlib memory
+0x8000" (osfmk/kdp/output_stages/out_zlib.c:260, inside kdp_init).
+
+STALL: boot hangs silently right after kdp_init. In kernel_bootstrap
+(startup.c) the next steps are hv_support_init (HYPERVISOR),
+bootprofile_init (CONFIG_TELEMETRY),
+kernel_startup_initialize_upto(STARTUP_SUB_SYSCTL), PE_init_iokit,
+kernel_startup_initialize_upto(STARTUP_SUB_EARLY_BOOT), spllo,
+initialize_screen. No panic, no further output after >4 min.
+
+startup_debug=1 boot-arg produced NO extra output (tunable parsed but
+verbose prints absent — reason unclear; possibly not reaching the
+kprintf gate or arg not applied). Patch 0083 instead adds
+unconditional SWEET kprintf markers around each startup entry
+(SE%02d.rank@func(arg) + SEok) and checkpoints SEB:hv/bp/sysctl/iokit/
+eb/irqon so the next boot photo directly names the hanging entry.
+Build run 39248634013.
+
 ## Open questions / guesses
 
 - Whether dynamic memory pools (not in the DT) steal from the chosen RAM
