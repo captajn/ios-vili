@@ -220,6 +220,55 @@ Lesson: kprintf is NOT safe during early startup entries (LOCKS,
 KPRINTF phases). Any future early instrumentation must write the
 framebuffer directly like the SWEET EARLY markers, or stay >= SYSCTL.
 
+## Fifth XNU boot (build 39252040725 + debug=0x10000c) — hypothesis FALSIFIED
+
+Photo 2026-10-19 19:40 booted the repacked `debug=0x10000c` image (payload +
+shim-boot.img built 19:37, kernel sha256 8a33c781... = run 39252040725).
+Same stall as build 3, so DB_REBOOT_ALWAYS did nothing. Two root causes of
+our blindness, both proven from source (local mirror `build/xnu-src/`,
+fetched from apple-oss-distributions/xnu @ xnu-8796.101.5):
+
+1. **The early-FB console WRAPS, it does not scroll.** Patch 0010 does
+   `early_row = (early_row + 1) % EARLY_ROWS`, so the TOP line of a full
+   screen is the NEWEST output. The photo's top line is
+   `Serial requested, consistent debug disabled or debug boot arg not
+   present, configuring debugging over serial` — that printf is
+   kdp_udp.c ~:2288, i.e. AFTER `kdp_core_init()`. The ring boundary is
+   confirmed by the last two prints being adjacent on-screen (bottom row
+   `kdp_core zlib memory` -> top row `Serial requested`) and adjacent in
+   program order. So the real last message is "Serial requested...", and
+   the "hangs right after kdp_init" reading was accidentally right but for
+   the wrong reason.
+2. **Every 0083/0084 marker was swallowed.** They all call `kprintf`, and
+   `pexpert/arm/pe_kprintf.c:105` requires `!disable_serial_output &&
+   !disable_kprintf_output`. `disable_kprintf_output` is only cleared by the
+   `-enable_kprintf_spam` boot-arg in DEVELOPMENT builds (pe_kprintf.c:47-52).
+   `DB_KPRT = 0x8` (osfmk/kern/debug.h:516) was ALREADY set by `debug=0xc`,
+   so the spam flag was the single missing piece. This also explains why
+   `startup_debug=1` produced no output in build 3.
+
+Also: `zlib_stage_initialize()` (out_zlib.c:246-260) has NO debug-flag gate —
+the `kdp_core zlib memory 0x%lx` printf is simply the line before
+`kmem_alloc(kernel_map, ...)`. `debug=0x10000c` could never skip it. Reverted
+to `debug=0xc`: DB_REBOOT_ALWAYS would auto-reboot on panic and destroy the
+framebuffer panic screen we read every iteration.
+
+## Repack 19:53 (no rebuild): kprintf markers enabled
+
+`python3 tools/mkpayload.py xnu/out/kernel.development.sweet
+build/vili-highmem.adt build/payload.bin --cmdline "debug=0xc serial=3
+cpus=1 keepsyms=1 -enable_kprintf_spam"` then `mkbootimg3.py --kernel
+shim/out/Image --payload build/payload.bin` (shim Image unchanged from 18:29).
+Image `shim/out/shim-boot.img` 16,867,424 B, sha256 `592ea5328dd11b68...`,
+same kernel 8a33c781... Expected: the compiled-in SEK:pkt/SEK:core,
+KOS:buf/net/pro/shm/mba/done and SEB:hv/bp/sysctl/iokit/eb/irqon markers now
+appear, naming the exact hang. Caveat: kprintf goes through `PE_kputc`, which
+is `serial_putc_crlf` if `serial_init()` succeeded — our ADT has no
+uart0/PI3/gpio node (scanned), so it must fall back to
+`console_write_unbuffered` (framebuffer). If the next photo shows NO markers
+at all, the serial path is live and the fix is to rebuild 0083/0084 with
+`printf` instead of `kprintf`.
+
 ## Open questions / guesses
 
 - Whether dynamic memory pools (not in the DT) steal from the chosen RAM
