@@ -371,8 +371,74 @@ without `done:` is the hang, with no symbolication needed.
 Image: `shim/out/shim-boot.img` sha `7e9c7b1d151c3b19`, cmdline
 `debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam startup_debug=1 rd=ufsroot0`.
 
-## Open questions / guesses
+## Eighth XNU boot (20:41, repack `7e9c7b1d…` + `startup_debug=1`) — SOLVED the reading
 
+`startup_debug=1` finally works and confirms the diagnosis of the gate: every
+stock `entry:`/`done:` and `kernel_bootstrap: <phase>` line shares the same
+`kprintf` gate as the SWEET markers, so it was silent for the same reason.
+Tail of the console (newest last):
+
+    kernel_startup_initialize_upto: reached phase 16
+    SEB:irqon
+    kernel_bootstrap: mac_policy_initmach
+    kernel_bootstrap: vnguard_policy_init
+    calling mpo_policy_init for vnguard
+    Security policy loaded: Guarded vnode policy (vnguard)
+    kernel_bootstrap: dtrace_early_init
+    kernel_bootstrap: trust_cache_init
+    SWEET: trust caches unavailable (Image4/AMFI not installed)
+    kernel_startup_initialize_upto: reached phase -1
+    kernel_bootstrap: OSKextRemoveKextBootstrap
+    keepsyms boot arg specified; keeping linkedit segment for symbols.
+    kernel_bootstrap: machine_lockdown
+    No POST boot-arg set.
+    kernel_bootstrap: kernel_do_post - done
+    kernel_bootstrap: PE_lockdown_iokit
+    SWEET: starting device-tree platform expert
+    SWEET: platform expert registered
+    SWEET AKS / WDT / SURF / HID buttons / HID touch / BATTERY registered
+    SWEET FB: AppleCLCD 1080x2400 stride 4320 at 0xea600000,
+             default surface 1, presented as 1125x2436      <- frozen here
+
+Two facts fall out:
+
+1. `SWEET: platform expert registered` prints *before* the pseudo devices, so
+   `SweetPlatformExpert::start()` (patch 0016) had already returned. The
+   AKS/WDT/SURF/HID/BATTERY/FB `start()`s are driven later, from inside
+   `PE_lockdown_iokit()` — they are residual publishes, not platform-expert
+   children.
+2. The last stock phase line is `PE_lockdown_iokit` and no `bsd_init` progress
+   follows, so the hang is in the narrow window
+   `AppleCLCD::start()` tail -> residual loop -> `PE_lockdown_iokit` return ->
+   `vm_set_restrictions` -> `kperf_init_early` -> `bsd_init` entry.
+
+## Instrumentation for the ninth boot (patches 0085 + 0086)
+
+Bisects that window in one CI run, all with sources verified locally:
+
+- `0086-vili-lockdown-trace.patch` (osfmk/kern/startup.c): `SEB:plok` before
+  `PE_lockdown_iokit()`, `SEB:plokdone` after it, `SEB:vmres` after
+  `vm_set_restrictions()`, `SEB:bsdinit` before `bsd_init()`.
+- `0085-vili-framebuffer-start-trace.patch`
+  (iokit/Kernel/arm/SweetFramebuffer.cpp): `SWEET FB: AppleCLCD start
+  returning` after the last IOLog, and a one-shot
+  `SWEET FB: vsync timer fired once` in `vsyncFired` (proves the private
+  IOWorkLoop + `IOTimerEventSource` armed in `start()` actually run).
+
+Both validated offline: 0085 by rebuilding SweetFramebuffer.cpp through
+0046/0054/0056/0058/0061/0062/0067/0079 and `git apply --check` (applies at
+offsets +10/-107), 0086 by `git apply --check` against the fetched upstream
+startup.c with zero offset. Kept as separate patches because 0083's hunk line
+counts are off-by-two in a way GNU `patch` (what dxb uses) tolerates but
+`git apply` rejects — do not "fix" 0083 while it is the thing that works.
+
+Reading the next photo: `SEB:plokdone` present => hang is after
+`PE_lockdown_iokit` (vm_set_restrictions / kperf / bsd_init entry). Absent but
+`AppleCLCD start returning` present => hang is in the residual loop or
+`lockdownKextMode`. Absent too => `AppleCLCD::start()` never returned despite
+the IOLog having been emitted.
+
+## Open questions / guesses
 - Whether dynamic memory pools (not in the DT) steal from the chosen RAM
   window — shim probe must verify. HIGH bank believed clean.
 - Whether ABL passes a merged FDT in x0 on `fastboot boot` for v3 images

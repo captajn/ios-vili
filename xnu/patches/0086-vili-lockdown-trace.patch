@@ -1,0 +1,37 @@
+diff --git a/osfmk/kern/startup.c b/osfmk/kern/startup.c
+--- a/osfmk/kern/startup.c
++++ b/osfmk/kern/startup.c
+@@ -771,20 +771,32 @@
+ #ifdef  IOKIT
+ 	kernel_bootstrap_log("PE_lockdown_iokit");
++#if defined(SWEET)
++	kprintf("SEB:plok\n");
++#endif
+ 	PE_lockdown_iokit();
++#if defined(SWEET)
++	kprintf("SEB:plokdone\n");
++#endif
+ #endif
+ 	/*
+ 	 * max_cpus must be nailed down by the time PE_lockdown_iokit() finishes,
+ 	 * at the latest
+ 	 */
+ 	vm_set_restrictions(machine_info.max_cpus);
++#if defined(SWEET)
++	kprintf("SEB:vmres\n");
++#endif
+ 
+ 
+ #if KPERF
+ 	kperf_init_early();
+ #endif
+ 
+ 	/*
+ 	 *	Start the user bootstrap.
+ 	 */
+ #ifdef  MACH_BSD
++#if defined(SWEET)
++	kprintf("SEB:bsdinit\n");
++#endif
+ 	bsd_init();
+ 
