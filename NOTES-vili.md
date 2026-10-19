@@ -92,6 +92,34 @@ First probe boot, photographed framebuffer console:
   through the QHEE path — 2 s wait (+ MPIDR|bit31 retry) sees all 8.
   For xnu, keep a generous settle delay before counting CPUs.
 
+## XNU build state (2026-10-19)
+
+- Repo now at `github.com/captajn/ios-vili` (push to upstream
+  dipa-studio/ios-sweet denied for captajn). `origin`=captajn/ios-vili,
+  `upstream`=dipa-studio/ios-sweet. Workflow `.github/workflows/xnu.yml`
+  (macos-14 + Xcode, xnu-8796 via blacktop/darwin-xnu-build + patches).
+- Push-triggered CI run **39237412087** = first vili xnu build
+  (kernel_config DEVELOPMENT, machine SWEET, keep_going). Artifacts:
+  `xnu-kernel` (kernel.development.sweet) + `xnu-buildtree`.
+- Kernel patches adapted for lahaina (commit 8979b9d):
+  - 0010/0012 early-FB debug: 0x9c000000 -> **0xea600000** (vili splash).
+    The bootstrap TTE trick (+2*PGBYTES, "L1 index 0") still applies —
+    with 16K granule one L1 entry covers 32 GB, so FB and both RAM
+    banks are all L1 index 0. Verified reasoning, not yet boot-tested.
+  - 0004 machine config: default VTIMER_INTID 19 -> **27**; REMOVED the
+    `gicr_write32(GICR_IPRIORITYR0...)` loop — proven to external-abort
+    on vili (FAR 0x17a70400). 0017 context updated to match.
+  - 0017 already reads `virtual-timer-intid` from ADT (mkadt emits 27).
+- Pending kernel-side work NOT yet done: touch (FTS/SPI 0xa8c000),
+  keys (PMK8350 PON + PM8350 GPIO6), SPMI/PMIC paths, USB dwc3@a600000.
+  Touch patches 0060-0063 are sweet-Goodix/I2C — must be rewritten.
+- ADTs generated: `build/vili-highmem.adt` (dram 0x200000000+6G) and
+  `build/vili-lowmem.adt` (0xf0000000 window). /product node missing —
+  needs `research/ipsw-x/d22ap.adt` (extract from IPSW, gitignored).
+- iPhone X 16.7.16 (20H392) IPSW downloading to
+  `research/ipsw-x/iphone10_3_16.7.16_20H392_Restore.ipsw`
+  (Apple CDN, for mkiosroot.sh root image later).
+
 ## Open questions / guesses
 
 - Whether dynamic memory pools (not in the DT) steal from the chosen RAM
@@ -108,13 +136,14 @@ First probe boot, photographed framebuffer console:
 
 ## Next
 
-1. WSL2: user approved install, restart pending — then install
-   aarch64-linux-gnu-gcc in the distro and run shim/build_vili.sh.
-2. `fastboot boot out/shim-boot.img` (no payload) -> expect the vili
-   probe screens (UFS dump, GIC/timer, PAR of 0x300000000). Phone returns
-   to Android by itself after ~3 min or via the power path.
-3. Then mkadt --highmem payload + kernel build (GitHub Actions, same as
-   sweet) and the first xnu attempt.
+1. Wait for CI run 39237412087 -> download `xnu-kernel` artifact ->
+   `tools/mkpayload.py kernel build/vili-highmem.adt build/payload.bin`
+   -> append via `tools/mkbootimg3.py --payload` -> `fastboot boot`.
+   First xnu attempt: cpus=1, watch for early-FB marks / panic text.
+2. Then iOS root image (mkiosroot.sh needs apfs-fuse + hfsplus tools in
+   WSL + the IPSW dmgs) -> userdata per AGENTS.md approval (confirm
+   before any flash — still fastboot-boot-only until then).
+3. Touch driver for FTS-over-GENI-SPI; keys via PMK8350 PON.
 
 Artifacts kept out of git: E:\Code\Rom\vili\ (backups, live FDT, ROM).
 Build deps on Windows/WSL: aarch64-linux-gnu-gcc, python3. mkbootimg is
