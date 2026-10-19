@@ -60,6 +60,38 @@ backup of 16 partitions in E:\Code\Rom\vili\backup). ABL merges dtb_idx=0
   intentionally kept so existing kernel patches still match.
 - mkpayload.py, fdt.c, ufs.c, console.c: unchanged (generic or same base).
 
+## Validated on hardware (2026-10-19, shim-boot.img via fastboot boot)
+
+First probe boot, photographed framebuffer console:
+
+- **Framebuffer 0xea600000 works** — console renders 1080x2400.
+- **UFS read path works** — VER=0x300, CAP=0x1587031F, HCE=1, HCS=0x10f;
+  took over ABL's UTRL (was 0x9ea5b000), SCSI TUR/CAP/READ(10) all rc=0.
+  LUN0 lastlba=0x3afabff (4 KiB blocks, ~238 GiB). GPT parses:
+  persist, super, cust(ext4), userdata @lba 0x2eec00 (0x380bf MiB).
+- **DTB passed in x0** (magic D00DFEED at 0xae944000).
+- **ABL sets /chosen linux,initrd-* even on boot v3** (region at
+  ~0xaeb45000 containing non-payload data) -> loader must check the
+  SWEETXNU magic, not just prop presence. Done: falls back to the
+  res2/res3 appended payload.
+- **MMU on with 16K granule works** (PARange=2 i.e. 40-bit PA, TG16=1).
+  Identity map extended to 16 GiB covers RAM to 0x380000000.
+- **PSCI 1.1 works**: PSCI_VERSION and SYSTEM_RESET both fine (phone
+  reset back to Android by itself).
+- **GICv3**: distributor already enabled (CTLR 0x53), redistributor found
+  at 0x17a60000, IGROUPR0/ISENABLER0 writes take (bits 1,27,30 set).
+  BUT: **writes to redist IPRIORITYR take an external abort**
+  (FAR=0x17a70400, ESR=0x96000010) regardless of access size — reads are
+  fine. We now leave priorities at default 0 (PMR 0xf0).
+- **cntv_* timer regs work** — VTIMER INTID 27 fired 31 irqs in 300 ms;
+  SGI self-send works (10 irqs). **cntp_ctl_el0 write traps to EL2**
+  (EC 0x00, QHEE virtualizes the phys timer) — only clear it when armed.
+- **SMP works**: PSCI_CPU_ON starts all 7 secondaries at our entry
+  (mpidr 0x81000100..0x81000700, i.e. Aff1 index + bit31/MT). First
+  500 ms poll showed only cores 5-7: cores 1-4 just start slower
+  through the QHEE path — 2 s wait (+ MPIDR|bit31 retry) sees all 8.
+  For xnu, keep a generous settle delay before counting CPUs.
+
 ## Open questions / guesses
 
 - Whether dynamic memory pools (not in the DT) steal from the chosen RAM

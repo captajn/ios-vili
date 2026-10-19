@@ -86,30 +86,37 @@ static inline uint64_t rd64(uintptr_t a) { return *(volatile uint64_t *)a; }
 
 extern char _head[];	/* start.S: ARM64 Image header at image base */
 
+static int payload_at(uint64_t start)
+{
+	const struct payload *p = (const struct payload *)start;
+
+	return magic_ok(p->magic) && !(p->version != 1 || (p->adt_off & 7) || (start & 7));
+}
+
 const char *loader_boot(uintptr_t dtb)
 {
-	uint64_t rd_start, rd_end;
+	uint64_t rd_start = 0, rd_end = 0;
 
+	/* vili ABL sets linux,initrd-* even on boot v3 (pointing at a region
+	 * that is not our payload), so check the magic, not just the props. */
 	if (fdt_chosen_u64(dtb, "linux,initrd-start", &rd_start) &&
-	    fdt_chosen_u64(dtb, "linux,initrd-end", &rd_end)) {
+	    fdt_chosen_u64(dtb, "linux,initrd-end", &rd_end))
 		con_hex2("INITRD", "lo=", rd_start, "hi=", rd_end);
-	} else {
+	if (!rd_start || !payload_at(rd_start)) {
 		/* Boot v3: payload appended to the kernel blob; res2/res3 hold
 		 * its file offset and size (0 if a bare probe image). */
 		uintptr_t img = (uintptr_t)_head;
 		uint64_t off = rd64(img + 0x20), len = rd64(img + 0x28);
 		if (!off || !len)
-			return "no initrd in /chosen and res2/res3 empty";
+			return "no SWEETXNU payload";
 		rd_start = img + off;
 		rd_end = rd_start + len;
 		con_hex2("APPEND", "lo=", rd_start, "hi=", rd_end);
+		if (!payload_at(rd_start))
+			return "bad payload header";
 	}
 
 	const struct payload *p = (const struct payload *)rd_start;
-	if (!magic_ok(p->magic))
-		return "no SWEETXNU payload";
-	if (p->version != 1 || (p->adt_off & 7) || (rd_start & 7))
-		return "bad payload header";
 
 	uint64_t pa_of_va_base = p->phys_base - p->virt_base;	/* pa = va + this */
 	con_hex2("PHYS", "base=", p->phys_base, "size=", p->mem_size);

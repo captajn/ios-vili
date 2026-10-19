@@ -101,10 +101,20 @@ static void delay_ms(unsigned ms)
 		;
 }
 
+/* Invalidate our cached view of a range secondaries wrote while MMU-off. */
+static void dinv(const volatile void *p, uint64_t n)
+{
+	uint64_t line = 4UL << ((rsr("ctr_el0") >> 16) & 0xf);
+	uintptr_t s = (uintptr_t)p & ~(line - 1), e = (uintptr_t)p + n;
+	for (uintptr_t a = s; a < e; a += line)
+		__asm__ volatile("dc ivac, %0" : : "r"(a) : "memory");
+	__asm__ volatile("dsb sy; isb" ::: "memory");
+}
+
 static void __attribute__((noreturn)) reset(unsigned after_s)
 {
 	con_skip();
-	con_str("RESET", after_s > 20 ? "in 40s" : "in 20s");
+	con_str("RESET", after_s >= 300 ? "in ~5 min" : after_s > 20 ? "in 40s" : "in 20s");
 	delay_ms(after_s * 1000);
 	wr32(IMEM_RESTART_REASON, RESTART_BOOTLOADER);
 	__asm__ volatile("dsb sy" ::: "memory");
@@ -160,7 +170,7 @@ void exc_handler(uint64_t slot, uint64_t *regs)
 	con_hex("X0", regs[0]);
 	con_hex("X1", regs[1]);
 	con_hex("X30", regs[29]);	/* stashed lr is just above the frame */
-	reset(40);
+	reset(300);	/* hold the panic screen long enough to photograph */
 }
 
 /* ---- SMP ---- */
@@ -176,8 +186,7 @@ void secondary_main(uint64_t idx)
 			sec_probe[0] = rd32(r + GICR_IGROUPR0);
 			wr32(r + GICR_IGROUPR0, 0xffffffff);
 			sec_probe[1] = rd32(r + GICR_IGROUPR0);
-			wr8(r + GICR_IPRIORITYR + 19, 0xa0);
-			sec_probe[2] = rd32(r + GICR_IPRIORITYR + 16);
+			sec_probe[2] = rd32(r + GICR_IPRIORITYR + 16);	/* read ok, write aborts on lahaina */
 		}
 		sec_probe[3] = r ? 1 : 0xdead;
 	}
@@ -185,7 +194,7 @@ void secondary_main(uint64_t idx)
 	smc(PSCI_CPU_OFF, 0, 0, 0);
 }
 
-static void __attribute__((unused)) test_smp(void)
+static void test_smp(void)
 {
 	stage = "smp";
 	uint64_t self = rsr("mpidr_el1") & 0xffffff;
@@ -193,7 +202,16 @@ static void __attribute__((unused)) test_smp(void)
 
 	for (int i = 1; i < NR_CPUS; i++)
 		ret[i] = smc(PSCI_CPU_ON, (uint64_t)i << 8, (uintptr_t)secondary_entry, i);
-	delay_ms(500);
+	delay_ms(2000);
+	/* Secondaries ran MMU-off; their writes live in DRAM, our L1 may be stale. */
+	dinv(sec_mpidr, sizeof(sec_mpidr));
+	dinv(sec_probe, sizeof(sec_probe));
+	/* QHEE may compare MPIDR including the RES1 bit31 -> retry dead cores. */
+	for (int i = 1; i < NR_CPUS; i++)
+		if (!sec_mpidr[i])
+			ret[i] = smc(PSCI_CPU_ON, (i << 8) | 0x80000000UL, (uintptr_t)secondary_entry, i);
+	delay_ms(1000);
+	dinv(sec_mpidr, sizeof(sec_mpidr));
 	for (int i = 1; i < NR_CPUS; i++) {
 		char label[] = "CPU0";
 		label[3] = '0' + i;
@@ -271,7 +289,10 @@ static void irq_window(const char *label, uintptr_t r, int src)
 		}
 	__asm__ volatile("msr daifset, #2" ::: "memory");
 	wsr("cntv_ctl_el0", 0);
-	wsr("cntp_ctl_el0", 0);
+	/* vili: cntp_ctl_el0 writes trap to EL2 on lahaina (QHEE virtualizes the
+	 * physical timer); only clear it if this window actually armed it */
+	if (src == PTIMER_INTID)
+		wsr("cntp_ctl_el0", 0);
 	isb();
 
 	con_hex2(label, "irqs=", irq_count, "other=", irq_other);
@@ -314,18 +335,23 @@ static void test_gic(void)
 	}
 	con_hex2("GICR", "base=", r, "waker=", rd32(r + GICR_WAKER));
 
-	stage = "gic config";
+	stage = "gic cfg rd";
 	uint32_t grp = rd32(r + GICR_IGROUPR0);
-	wr32(r + GICR_IGROUPR0, 0xffffffff);	/* NS view: secure bits are WI */
 	uint32_t en_before = rd32(r + GICR_ISENABLER0);
 	uint32_t pri_before = rd32(r + GICR_IPRIORITYR + 16);	/* INTIDs 16..19 */
-	for (int id = 0; id < 32; id++)
-		wr8(r + GICR_IPRIORITYR + id, 0xa0);
-	wr32(r + GICR_ISENABLER0, (1U << VTIMER_INTID) | (1U << PTIMER_INTID) | (1U << SGI_INTID));
-	con_hex2("ENABLE", "was=", en_before, "now=", rd32(r + GICR_ISENABLER0));
-	(void)grp;
+	con_hex2("RD", "igrp=", grp, "ien=", en_before);
 	(void)pri_before;
 
+	stage = "gic cfg igroup";
+	wr32(r + GICR_IGROUPR0, 0xffffffff);	/* NS view: secure bits are WI */
+	stage = "gic cfg enab";
+	/* vili: writes to the lahaina redist IPRIORITYR take an external abort
+	 * (FAR hit at +0x10400 even for a 32-bit store); default priority 0 is
+	 * fine since PMR=0xf0 passes everything, so don't program it. */
+	wr32(r + GICR_ISENABLER0, (1U << VTIMER_INTID) | (1U << PTIMER_INTID) | (1U << SGI_INTID));
+	con_hex2("ENABLE", "was=", en_before, "now=", rd32(r + GICR_ISENABLER0));
+
+	stage = "gic icc";
 	uint64_t ctlr = rsr("icc_ctlr_el1");
 	wsr("icc_ctlr_el1", ctlr & ~2ULL);	/* EOImode 0: EOIR also deactivates */
 	wsr("icc_pmr_el1", 0xf0);
@@ -389,10 +415,10 @@ void shim_main(uint64_t dtb)
 	stage = "ufs";
 	test_ufs();
 	con_skip();
-	/* Keep the probe results on screen (later tests clear it); reset after 3 min. */
-	con_str("UFS", "probe done, reset in ~3 min");
-	delay_ms(180000);
-	reset(20);
+	/* Keep the UFS results on screen briefly, then fall through to the
+	 * MMU/GIC/PSCI probes below (they clear the screen themselves). */
+	con_str("UFS", "probe done, next tests in ~20s");
+	delay_ms(20000);
 
 	stage = "fill off";
 	uint64_t fill_off = ticks_fill(RED);
@@ -430,8 +456,10 @@ void shim_main(uint64_t dtb)
 	stage = "psci";
 	con_hex2("PSCI", "ver=", smc(PSCI_VERSION, 0, 0, 0), "smccc=", smc(SMCCC_VERSION, 0, 0, 0));
 	con_skip();
+	test_smp();
+	con_skip();
 	test_gic();
 
 	stage = "done";
-	reset(40);
+	reset(300);
 }
