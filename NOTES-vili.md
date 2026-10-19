@@ -438,6 +438,71 @@ Reading the next photo: `SEB:plokdone` present => hang is after
 `lockdownKextMode`. Absent too => `AppleCLCD::start()` never returned despite
 the IOLog having been emitted.
 
+## Ninth XNU boot (21:02, repack of CI kernel `5b95be5b…`, patches 0085+0086) — framebuffer exonerated
+
+`photo_2026-10-19_21-02-36.jpg`, cmdline unchanged (`… -enable_kprintf_spam
+startup_debug=1 rd=ufsroot0`). Bottom of the console, in order:
+
+```
+kernel_bootstrap: PE_lockdown_iokit
+SEB:plok
+SEB:plokdone
+SEB:vmres
+SWEET: starting device-tree platform expert
+SWEET: platform expert registered
+SWEET AKS/WDT/SURF/HID buttons/HID touch/BATTERY …
+SWEET FB: AppleCLCD 1080x2400 stride 4320 at 0xea600000, default surface 1, presented as 1125x2436
+SWEET FB: AppleCLCD start returning
+SWEET FB: vsync timer fired once
+SEok            <- last line, and the user confirmed "still this picture"
+```
+
+Observations (not guesses):
+- `SEB:plokdone` + `SEB:vmres` printed => `PE_lockdown_iokit()` **returned** and
+  `vm_set_restrictions()` completed. The earlier "hang at the tail of
+  `AppleCLCD::start()`" reading is dead.
+- `SWEET FB: AppleCLCD start returning` and `vsync timer fired once` printed =>
+  `AppleCLCD::start()` returns and its private IOWorkLoop + IOTimerEventSource
+  run. The panel/driver is not the blocker.
+- The SWEET device logs sit *after* `SEB:vmres` in the buffer although
+  `PE_lockdown_iokit` already returned => they are asynchronous residual-match
+  output on a workloop thread, and they interleave with (and hide) the boot
+  thread's position. Reading the bottom line of the console is therefore only
+  meaningful for the thread that printed last.
+- **`SEB:bsdinit` is absent.** The only uninstrumented code left between the
+  last confirmed boot-thread point and `bsd_init()` is `kperf_init_early()`
+  (osfmk/kern/startup.c:782-784) plus the entry of `bsd_init()` itself.
+- The trailing `SEok` cannot come after `SEB:vmres` in program order (the
+  startup loop is finished at `reached phase -1`), so it is either a stale row
+  of the 74-row wrapping console or a row clobbered by the unlocked concurrent
+  console writer. Either way it is not evidence about the boot thread.
+
+## Instrumentation for the tenth boot (0086 extended + 0087)
+
+- `0086-vili-lockdown-trace.patch` now also prints `SEB:kperf0` before and
+  `SEB:kperf1` after `kperf_init_early()` (hunk is `@@ -771,20 +771,38 @@`).
+- `0087-sweet-bsdinit-trace.patch` (bsd/kern/bsd_init.c:489-502) flips the
+  stock `#define DEBUG_BSDINIT 0` to `1` and adds one `enter` trace. That
+  switch already exists upstream and turns on **47** built-in
+  `bsd_init: calling X` kprintfs covering `dev_kmem_init` (506) through
+  `bsd_do_post - done` (1076), including `vfsinit`, `bsd_autoconf`,
+  `inittodr`, `vfs_mountroot` and `VFS_ROOT`. No other patch touches that
+  file below line 690, so the hunk applies at offset 0.
+- Both verified by applying them for real to the fetched upstream copies and
+  diffing the result (GNU `patch` reports fuzz 1/2 only because of the blank
+  context lines; the output is byte-exact).
+- Resolved as a side effect: `platform_stall_panic_or_spin()` cannot be the
+  hang. It is called at the top of `kernel_bootstrap_thread()`
+  (startup.c:597-599) with the same DEVELOPMENT guard and that function ran to
+  completion, so it returns immediately without a stall boot-arg.
+
+Reading the tenth photo: `SEB:kperf0` without `SEB:kperf1` => `kperf_init_early`.
+`SEB:bsdinit` + `bsd_init: enter` + a run of `bsd_init: calling X` => the boot
+thread is inside bsd_init and the last `calling X` names the blocker (expect
+`vfs_mountroot` to fail loudly: `userdata` still holds Android, so there is no
+iOS root to mount yet). Nothing after `SEB:vmres`/`SEB:kperf0` => the console
+writer itself is the problem, not the boot thread.
+
 ## Open questions / guesses
 - Whether dynamic memory pools (not in the DT) steal from the chosen RAM
   window — shim probe must verify. HIGH bank believed clean.

@@ -1,7 +1,7 @@
 diff --git a/osfmk/kern/startup.c b/osfmk/kern/startup.c
 --- a/osfmk/kern/startup.c
 +++ b/osfmk/kern/startup.c
-@@ -771,20 +771,32 @@
+@@ -771,20 +771,38 @@
  #ifdef  IOKIT
  	kernel_bootstrap_log("PE_lockdown_iokit");
 +#if defined(SWEET)
@@ -23,7 +23,13 @@ diff --git a/osfmk/kern/startup.c b/osfmk/kern/startup.c
  
  
  #if KPERF
++#if defined(SWEET)
++	kprintf("SEB:kperf0\n");
++#endif
  	kperf_init_early();
++#if defined(SWEET)
++	kprintf("SEB:kperf1\n");
++#endif
  #endif
  
  	/*
@@ -34,4 +40,3 @@ diff --git a/osfmk/kern/startup.c b/osfmk/kern/startup.c
 +	kprintf("SEB:bsdinit\n");
 +#endif
  	bsd_init();
- 
