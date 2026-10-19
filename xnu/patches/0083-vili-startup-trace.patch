@@ -1,0 +1,69 @@
+diff --git a/osfmk/kern/startup.c b/osfmk/kern/startup.c
+--- a/osfmk/kern/startup.c
++++ b/osfmk/kern/startup.c
+@@ -402,11 +402,18 @@
+ 		if ((startup_debug & STARTUP_DEBUG_VERBOSE) &&
+ 		    startup_phase >= STARTUP_SUB_KPRINTF) {
+ 			kprintf("%s[%d, rank %d]: %p(%p)\n", __func__,
+ 			    cur->subsystem, cur->rank, cur->func, cur->arg);
+ 		}
+ 		startup_phase = cur->subsystem - 1;
+ 		kernel_startup_log(cur->subsystem);
++#if defined(SWEET)
++		kprintf("SE%02d.%d@%p(%p)\n", cur->subsystem, cur->rank,
++		    cur->func, cur->arg);
++#endif
+ 		cur->func(cur->arg);
++#if defined(SWEET)
++		kprintf("SEok\n");
++#endif
+ 		startup_entry_cur = ++cur;
+ 	}
+ 	kernel_startup_log(upto);
+@@ -662,4 +669,7 @@
+ #if HYPERVISOR
+ 	kernel_bootstrap_thread_log("hv_support_init");
++#if defined(SWEET)
++	kprintf("SEB:hv\n");
++#endif
+ 	hv_support_init();
+ #endif
+@@ -667,8 +677,14 @@
+ #if CONFIG_TELEMETRY
+ 	kernel_bootstrap_log("bootprofile_init");
++#if defined(SWEET)
++	kprintf("SEB:bp\n");
++#endif
+ 	bootprofile_init();
+ #endif
+ 
++#if defined(SWEET)
++	kprintf("SEB:sysctl\n");
++#endif
+ 	kernel_startup_initialize_upto(STARTUP_SUB_SYSCTL);
+ 
+ 	/*
+@@ -687,4 +703,7 @@
+ #ifdef  IOKIT
+ 	kernel_bootstrap_log("PE_init_iokit");
++#if defined(SWEET)
++	kprintf("SEB:iokit\n");
++#endif
+ 	PE_init_iokit();
+ #endif
+@@ -696,3 +715,6 @@
+ 	 * interrupts or preemption enabled may begin enforcement.
+ 	 */
++#if defined(SWEET)
++	kprintf("SEB:eb\n");
++#endif
+ 	kernel_startup_initialize_upto(STARTUP_SUB_EARLY_BOOT);
+@@ -703,3 +725,6 @@
+ #endif
+ 	(void) spllo();         /* Allow interruptions */
++#if defined(SWEET)
++	kprintf("SEB:irqon\n");
++#endif
+ 
+ 	/*
+  * This will start displaying progress to the user, start as early as possible
