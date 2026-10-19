@@ -147,9 +147,9 @@ index 3ad743f..4ec6989 100644
 +	 * from the non-secure side even after this write; delivery still works.
 +	 */
 +	gicr_write32(GICR_IGROUPR0, 0xFFFFFFFF);
-+	for (unsigned int i = 0; i < 32; i += 4) {
-+		gicr_write32(GICR_IPRIORITYR0 + i, 0xA0A0A0A0);
-+	}
++	/* vili: lahaina's redist takes an external abort on ANY IPRIORITYR
++	 * write (proven in the shim probe). Default priority 0 + PMR 0xff
++	 * already passes everything, so leave priorities unprogrammed. */
 +	gicr_write32(GICR_ISENABLER0, (1U << SWEET_VTIMER_INTID) | (1U << SWEET_IPI_SGI));
 +#else
  	// Configure timers and legacy FIQ to be group 0
@@ -256,11 +256,11 @@ index 0000000..a044ad0
 +#endif /* ! ASSEMBLER */
 +
 +/*
-+ * Qualcomm numbers the architected timer PPIs 1/2/3/0 (secure phys, phys,
-+ * virt, hyp) instead of the usual 13/14/11/10: the virtual timer XNU uses
-+ * (CNTV) is INTID 16 + 3 = 19.
++ * Vili (lahaina) uses the standard ARM numbering: virtual timer PPI 11,
++ * i.e. INTID 16 + 11 = 27. The ADT's virtual-timer-intid property
++ * overrides this at runtime (patch 0017), this is just the fallback.
 + */
-+#define SWEET_VTIMER_INTID        19
++#define SWEET_VTIMER_INTID        27
 +#define SWEET_IPI_SGI             1       // SGI used for cross-CPU signals
 +
 +#define GIC_SPURIOUS_IRQ          1023    // IRQ no. for GIC spurious interrupt
