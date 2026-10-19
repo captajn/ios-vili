@@ -116,9 +116,44 @@ First probe boot, photographed framebuffer console:
 - ADTs generated: `build/vili-highmem.adt` (dram 0x200000000+6G) and
   `build/vili-lowmem.adt` (0xf0000000 window). /product node missing —
   needs `research/ipsw-x/d22ap.adt` (extract from IPSW, gitignored).
-- iPhone X 16.7.16 (20H392) IPSW downloading to
-  `research/ipsw-x/iphone10_3_16.7.16_20H392_Restore.ipsw`
-  (Apple CDN, for mkiosroot.sh root image later).
+- iPhone X 16.7.16 (20H392) IPSW downloaded:
+  `research/ipsw-x/iPhone10,3,iPhone10,6_16.7.16_20H392_Restore.ipsw` (6.2 GB).
+  `research/ipsw-x/d22ap.adt` extracted (real iPhone X device tree ->
+  /product node now present in generated ADTs). DMGs extracted to
+  `research/ipsw-x/dmgs/`: OS=`087-86698-044.dmg` (4.7G),
+  SystemOS=`087-86593-047.dmg` (2.7G), AppOS=`087-86715-047.dmg` (10M).
+- WSL tools for mkiosroot.sh installed: apfs-fuse (built from sgan81
+  HEAD at /root/apfs-fuse, copied to /usr/local/bin; needed
+  `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` + `#include <cstdint>` in
+  ApfsLib/PList.h for GCC 15), hfsprogs (mkfs/fsck.hfsplus), fuse3,
+  lzfse, rsync.
+
+## First XNU boot attempt (2026-10-19, build run 39237412087)
+
+kernel.development.sweet (17 MB Mach-O) + vili-highmem.adt payload +
+appended via mkbootimg3 res2/res3. `fastboot boot` -> real XNU panic
+screen (framebuffer panic UI works!):
+
+    panic: Kernel data abort. at pc 0xfffffe0007a78ef4
+    lr 0xfffffe0007a78ee0  esr 0x96000010 (external abort, write)
+    far 0xfffffe000cd04080  (io_map VA -> PA 0x17a70080)
+
+Symbolicated via LINKEDIT symtab (70,853 syms): pc/lr both inside
+`_pe_init_fiq` (+0x1a0/+0x18c). Disasm: the faulting insn is
+`str w9,[x8,#128]!` with w9=0xFFFFFFFF = `gicr_write32(GICR_IGROUPR0,
+0xFFFFFFFF)` — the FIRST redist config write. So on lahaina, NS writes
+to GICR_IGROUPR0 are XPU-blocked exactly like IPRIORITYR (the shim's
+probe "passed" only because its posted device store dropped the write
+silently — readback was never checked).
+
+Fix (commit pending = "vili: drop GICR IGROUPR0 write"): remove the
+IGROUPR0 write; keep ISENABLER0 (verified takes). Group assignment is
+whatever QHEE left — Linux works, so SGI/PPI must already be in a
+non-secure-visible group. SECOND build queued: CI run 39241159323.
+
+Risk to watch: if PPIs/SGIs are actually Group0, the vtimer won't
+deliver -> early hang later (calibration). If so, need to test whether
+an IGROUPR0 write via different attributes/EL path works.
 
 ## Open questions / guesses
 
