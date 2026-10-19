@@ -1,0 +1,22 @@
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -2242,12 +2242,18 @@
+ static void
+ _enable_virtual_timer(void)
+ {
+ 	uint64_t cntvctl = CNTV_CTL_EL0_ENABLE; /* One wants to use 32 bits, but "mrs" prefers it this way */
+ 
+ 	__builtin_arm_wsr64("CNTV_CTL_EL0", cntvctl);
++#if !defined(SWEET)
+ 	/* disable the physical timer as a precaution, as its registers reset to architecturally unknown values */
+ 	__builtin_arm_wsr64("CNTP_CTL_EL0", CNTP_CTL_EL0_IMASKED);
++#else
++	/* vili/lahaina: CNTP_CTL_EL0 writes trap to EL2 (QHEE) and come back as
++	 * an UNDEFINED-instruction abort (EC 0). The physical timer is not used
++	 * on this platform, so skip the precautionary mask entirely. */
++#endif
+ }
+ 
+ void
+ fiq_context_init(boolean_t enable_fiq __unused)
