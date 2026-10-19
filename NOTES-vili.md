@@ -269,6 +269,45 @@ uart0/PI3/gpio node (scanned), so it must fall back to
 at all, the serial path is live and the fix is to rebuild 0083/0084 with
 `printf` instead of `kprintf`.
 
+## Sixth XNU boot (19:53 repack + `-enable_kprintf_spam`) — markers ALIVE, boot is far ahead
+
+Photo 19:55:35 (~40 s after `fastboot boot`) still showed only up to
+`Serial requested` — that was just *early*, not a hang. Photo 19:58:19 shows
+the whole 0083/0084 marker stream rendering on the framebuffer: `-enable_kprintf_spam`
+was indeed the only missing piece, and `kprintf` does reach the FB console
+(PE_kputc fell back to console_write_unbuffered; our ADT has no uart node).
+
+**The boot is NOT hung at kdp_init.** It runs through STARTUP_SUB_SYSCTL and
+STARTUP_SUB_EARLY_BOOT and past MACF. Symbolicated the hook VAs with
+`build/symres.py` (LINKEDIT symtab, 70,853 syms, kernel 8a33c781):
+
+- `SE15.-1 0x...afcabc(...)` x9 = `_sysctl_register_oid_early` (SYSCTL hooks)
+- `SEB:iokit` -> `iBoot version: vili-shim`, `"name"/"HAPL.phandle" not a kext`
+- `SEB:eb` then EARLY_BOOT rank 0: `_ulock_initialize` (+`ulock_initialize>thread_max=10240,
+  ull_hash_buckets=4096`), `_procinit`, 0x...ab910c, `_sweet_prng_startup`
+  (`SWEET PRNG: HMAC-SHA256 registered`), 0x...73c8d58
+- rank 100: `_sweet_pthread_register` (`SWEET pthread: libpthread-514.100.2 registered`)
+- rank LAST: `_iotrace_init`, `_kmem_crypto_init`, `_personas_bootstrap`,
+  `_set_awl_scratch_exists_flag_and_subscribe_for_pm`, `_sweet_amfi_register`,
+  `_pgz_init`, 0x...acb990, `_kmem_add_extra_claims+0x216`
+- then **`SEB:irqon`** -> `calling app_policy_init for vnguard`, `Security policy
+  loaded`, `SWEET: trust caches unavailable`, `keepsyms`, `No POST boot-arg set`,
+  `SWEET: starting device-tree platform expert` + AKS/WDT/SURF/HID/BATTERY/FB
+
+Ring boundary sits between the bottom row and row 0 (both are
+`SE16.2147483647` entries), so the NEWEST line is
+`SWEET FB: AppleCLCD 1080x2400 stride 4320 at 0xea600000, default surface 1,
+presented as 1125x2436` = the tail of `AppleCLCD::start()` (patch 0046).
+
+Console holds only ~45 wrapped rows, so the history scrolls away: take photos
+at intervals and the last line that ever changes is the real hang point.
+
+**Expected endgame, not a bug:** this cmdline has no `rd=ufsroot0` and vili's
+`userdata` still holds Android (iOS root never built/flashed for vili), so the
+correct next milestone is sweet's 0020 state — `BSD root:` then
+`Waiting on ... IOMedia / Apple_HFS` with no panic. Per NOTES.md the sweet
+port reached PID 1 and Apple launchd at the equivalent stage.
+
 ## Open questions / guesses
 
 - Whether dynamic memory pools (not in the DT) steal from the chosen RAM
